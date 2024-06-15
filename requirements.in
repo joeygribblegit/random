@@ -1,0 +1,12 @@
+pandas==2.1.2
+requests==2.31.0
+geopandas==0.14.0
+folium==0.14.0
+librosa==0.10.1
+moviepy
+imageio_ffmpeg
+numpy
+click
+protobuf
+pytest
+pytsk3
