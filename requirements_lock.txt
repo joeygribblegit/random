@@ -261,25 +261,6 @@ lazy-loader==0.4 \
     --hash=sha256:342aa8e14d543a154047afb4ba8ef17f5563baad3fc610d7b15b213b0f119efc \
     --hash=sha256:47c75182589b91a4e1a85a136c074285a5ad4d9f39c63e0d7fb76391c4574cd1
     # via librosa
-libewf-python==20240506 \
-    --hash=sha256:0b63ad4f41f0756ce88023b037e69aca7e0fc66b5d5e3e14f5d2e1197a15f210 \
-    --hash=sha256:113277cd979fd338a0321b7601cb378604b5ece972e52ec3dea1bf24caccd666 \
-    --hash=sha256:41281d7834136e54b5da769492266d476e1c5505b245a755ce09596a98298542 \
-    --hash=sha256:50408b6df700ed54cc5f1b996187b610f3b16c223d075b1f0d17c8da22e42702 \
-    --hash=sha256:6826c45484b84dbf76e953ebfec26086b46c89ec8bcbcbd730521d6138a9dfc3 \
-    --hash=sha256:68375dc901e82da2c9edb1ccb8fc145c8c8eefeb080628b792c584504d92b467 \
-    --hash=sha256:6dfe344004213cb81a83a42dafe263b9e4083381cfa8624ebcf6e213b1c082d2 \
-    --hash=sha256:91fa8eb0d4662a8a42fd36e5988e91842f8b8c70043349987273411643cb399c \
-    --hash=sha256:af7f4833f5133062ad0d0606153ab831d2325e1f58fc6fc49094b0e119cc6cab \
-    --hash=sha256:bd9174cfbe9d0e1ea5b478d2245dd19ab8ac1b798d18e52d4bbd70e6961e9bdc \
-    --hash=sha256:bf04e89c6aa12284578afd671944b25a686ddf46be245ca8e8af96eff209da5c \
-    --hash=sha256:c4df1b6876c3a4c37959a28f2e8a2d5c262025e15b0e66299a1740e6f2f2944d \
-    --hash=sha256:cd8a628456053e06e13fae30c0caaa1b2b821d24199af6f6ae3cc0dd96bf8fd5 \
-    --hash=sha256:cfd8e639b9c101e57939be71d32e1abd5659952f1e2bb9bbd7dd746afcafe200 \
-    --hash=sha256:f6bcd552c7ba59d67aac1bdc641499b1ad995ed5f7828a1fda5fe2085cace677 \
-    --hash=sha256:fcb3b758e59abd348b452ff3240f0590685868b5ebff28d15a12bb2963127d69 \
-    --hash=sha256:ffc6fab57fd8afcfef5408f443eacd3952d9bb308726a5e2abf227d0fe1fcd82
-    # via -r requirements.in
 librosa==0.10.1 \
     --hash=sha256:7ab91d9f5fcb75ea14848a05d3b1f825cf8d0c42ca160d19ae6874f2de2d8223 \
     --hash=sha256:832f7d150d6dd08ed2aa08c0567a4be58330635c32ddd2208de9bc91300802c7
@@ -536,6 +517,10 @@ pandas==2.1.2 \
     # via
     #   -r requirements.in
     #   geopandas
+piexif==1.1.3 \
+    --hash=sha256:3bc435d171720150b81b15d27e05e54b8abbde7b4242cddd81ef160d283108b6 \
+    --hash=sha256:83cb35c606bf3a1ea1a8f0a25cb42cf17e24353fd82e87ae3884e74a302a5f1b
+    # via -r requirements.in
 pillow==10.3.0 \
     --hash=sha256:048ad577748b9fa4a99a0548c64f2cb8d672d5bf2e643a739ac8faff1164238c \
     --hash=sha256:048eeade4c33fdf7e08da40ef402e748df113fd0b4584e32c4af74fe78baaeb2 \
@@ -606,7 +591,9 @@ pillow==10.3.0 \
     --hash=sha256:f0d0591a0aeaefdaf9a5e545e7485f89910c977087e7de2b6c388aec32011e9f \
     --hash=sha256:fdcbb4068117dfd9ce0138d068ac512843c52295ed996ae6dd1faf537b6dbc27 \
     --hash=sha256:ff61bfd9253c3915e6d41c651d5f962da23eda633cf02262990094a18a55371a
-    # via imageio
+    # via
+    #   -r requirements.in
+    #   imageio
 platformdirs==4.2.0 \
     --hash=sha256:0614df2a2f37e1a662acbd8e2b25b92ccf8632929bc6d43467e17fe89c75e068 \
     --hash=sha256:ef0cc731df711022c174543cb70a9b5bd22e5a9337c8624ef2c2ceb8ddad8768

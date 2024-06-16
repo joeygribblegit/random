@@ -61,3 +61,27 @@ py_binary(
         requirement("pytsk3"),
     ],
 )
+
+py_binary(
+    name = "metadata_updater",
+    main = "projects/metadata_updater/updater.py",
+    srcs = [
+        "projects/metadata_updater/updater.py",
+        ],
+    deps = [
+        requirement("piexif"),
+        requirement("Pillow"),
+    ],
+)
+
+py_binary(
+    name = "time_reverser",
+    main = "projects/metadata_updater/reverse_order.py",
+    srcs = [
+        "projects/metadata_updater/reverse_order.py",
+        ],
+    deps = [
+        requirement("piexif"),
+        requirement("Pillow"),
+    ],
+)
