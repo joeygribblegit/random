@@ -1,0 +1,8 @@
+syntax = "proto3";
+
+message YourProtoMessage {
+  optional string scenario_id = 1;
+  optional string tags = 2;
+  optional string req_1 = 3;
+  optional string req_2 = 4;
+}
