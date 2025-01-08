@@ -1,50 +1,46 @@
-load("@rules_python//python:defs.bzl", "py_binary", "py_library")
-load("@pip_deps//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_binary")
+load("@my_project_pip_hub//:requirements.bzl", "requirement")
 
-load("@rules_python//python:pip.bzl", "compile_pip_requirements")
-
-compile_pip_requirements(
-    name = "requirements",
-    requirements_in = "requirements.in",
-    requirements_txt = "requirements_lock.txt",
-)
-
-py_library(
-    name = "my_deps",
-    srcs = [],
+py_binary(
+    name = "cat_identifier",
+    main = "projects/cat_identifier/detector.py",
+    srcs = ["projects/cat_identifier/detector.py"],
     deps = [
-        requirement("pandas"),
-        requirement("geopandas"),
-        requirement("folium"),
+        requirement("opencv-python"),
+        requirement("ultralytics"),
     ],
 )
 
-py_binary(
-    name = "tessie",
-    main = "reader.py",
-    srcs = ["reader.py"],
-    deps = [":my_deps"],
-)
+# py_binary(
+#     name = "tessie",
+#     main = "projects/tessie_reader.py",
+#     srcs = ["projects/tessie_reader.py"],
+#     deps = [
+#         requirement("pandas"),
+#         requirement("geopandas"),
+#         requirement("folium"),
+#     ],
+# )
 
-py_binary(
-    name = "meow",
-    main = "cat_sound_finder.py",
-    srcs = ["cat_sound_finder.py"],
-    deps = [
-        requirement("librosa"),
-        requirement("moviepy"),
-        requirement("imageio_ffmpeg"),
-        requirement("numpy"),
-    ],
-)
+# py_binary(
+#     name = "meow",
+#     main = "projects/cat_sound_finder.py",
+#     srcs = ["projects/cat_sound_finder.py"],
+#     deps = [
+#         requirement("librosa"),
+#         requirement("moviepy"),
+#         requirement("imageio_ffmpeg"),
+#         requirement("numpy"),
+#     ],
+# )
 
 py_binary(
     name = "my_cli",
-    main = "cli/cli_run.py",
+    main = "projects/cli/cli_run.py",
     srcs = [
-        "cli/cli_run.py",
-        "cli/person_pb2.py",
-        ],
+        "projects/cli/cli_run.py",
+        "projects/cli/person_pb2.py",
+    ],
     deps = [
         requirement("click"),
         requirement("protobuf"),
@@ -56,7 +52,7 @@ py_binary(
     main = "projects/file_search/file_search.py",
     srcs = [
         "projects/file_search/file_search.py",
-        ],
+    ],
     deps = [
         requirement("pytsk3"),
     ],
@@ -67,7 +63,7 @@ py_binary(
     main = "projects/metadata_updater/updater.py",
     srcs = [
         "projects/metadata_updater/updater.py",
-        ],
+    ],
     deps = [
         requirement("piexif"),
         requirement("Pillow"),
@@ -79,9 +75,46 @@ py_binary(
     main = "projects/metadata_updater/reverse_order.py",
     srcs = [
         "projects/metadata_updater/reverse_order.py",
-        ],
+    ],
     deps = [
         requirement("piexif"),
         requirement("Pillow"),
+    ],
+)
+
+py_binary(
+    name = "cli-run",
+    main = "projects/scenario_tag_bulk_cli/scenario_tagging.py",
+    srcs = [
+        "projects/scenario_tag_bulk_cli/scenario_tagging.py",
+        "projects/scenario_tag_bulk_cli/scenario_tags_pb2.py",
+        ],
+    deps = [
+        requirement("click"),
+        requirement("protobuf"),
+    ],
+)
+
+py_binary(
+    name = "proto_cli_parser",
+    main = "projects/click_custom_proto_parser/proto_cli_parser.py",
+    srcs = [
+        "projects/click_custom_proto_parser/proto_cli_parser.py",
+        "projects/click_custom_proto_parser/joey_pb2.py",
+        ],
+    deps = [
+        requirement("click"),
+        requirement("protobuf"),
+    ],
+)
+
+py_binary(
+    name = "photo_resizer",
+    main = "projects/photo_resizer/resize.py",
+    srcs = [
+        "projects/photo_resizer/resize.py",
+        ],
+    deps = [
+
     ],
 )

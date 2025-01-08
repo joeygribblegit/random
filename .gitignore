@@ -189,6 +189,7 @@ bazel-cache
 
 # User-specific files
 *.personal.bazelrc
+virtual_env/
 
 # Temporary files
 *.swp

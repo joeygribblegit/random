@@ -12,3 +12,5 @@ pytest
 pytsk3
 piexif
 Pillow
+opencv-python
+ultralytics
