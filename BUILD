@@ -8,6 +8,7 @@ py_binary(
     deps = [
         requirement("opencv-python"),
         requirement("ultralytics"),
+        # requirement("tensorflow"),
     ],
 )
 
@@ -116,5 +117,15 @@ py_binary(
         ],
     deps = [
 
+    ],
+)
+
+py_binary(
+    name = "backup_analyzer",
+    main = "projects/backup_analyzer/backup_analyzer.py",
+    srcs = ["projects/backup_analyzer/backup_analyzer.py"],
+    deps = [
+        requirement("tqdm"),
+        requirement("psutil"),
     ],
 )

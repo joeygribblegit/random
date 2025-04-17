@@ -14,3 +14,8 @@ piexif
 Pillow
 opencv-python
 ultralytics
+setuptools>=42.0.0
+tensorflow
+tensorflow_io_gcs_filesystem
+tqdm>=4.66.2
+psutil>=5.9.0

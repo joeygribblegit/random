@@ -4,7 +4,7 @@ module(
 )
 
 # Add Bazel dependencies
-bazel_dep(name = "rules_python", version = "0.40.0")
+bazel_dep(name = "rules_python", version = "1.0.0")
 
 pip = use_extension("@rules_python//python/extensions:pip.bzl", "pip")
 pip.parse(
