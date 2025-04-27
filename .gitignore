@@ -170,6 +170,9 @@ bazel-out
 # Bazel configuration files
 *.bazelrc
 
+# Bazel Bzlmod lock file
+MODULE.bazel.lock
+
 # Bazel execution logs
 bazel-*.log
 
@@ -204,4 +207,5 @@ Thumbs.db
 .vscode/
 *.code-workspace
 
-
+# Test report
+projects/backup_analyzer/test_report.json
