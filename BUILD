@@ -129,3 +129,13 @@ py_binary(
         requirement("psutil"),
     ],
 )
+
+py_binary(
+    name = "backup_organizer",
+    main = "projects/backup_analyzer/backup_organizer.py",
+    srcs = ["projects/backup_analyzer/backup_organizer.py"],
+    deps = [
+        requirement("tqdm"),
+        requirement("psutil"),
+    ],
+)

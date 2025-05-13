@@ -34,6 +34,7 @@ CHUNK_SIZE = 8192  # 8KB chunks for hashing
 LARGE_FILE_THRESHOLD = 100 * 1024 * 1024  # 100MB
 MAX_WORKERS = min(mp.cpu_count(), 16)  # Use more cores but cap at 16
 BATCH_SIZE = 1000  # Process files in batches
+SIZE_CHUNK = 1024 * 1024  # 1MB for size-based comparison
 
 class BackupAnalyzer:
     def __init__(self, root_dir: str, dry_run: bool = True, cache_file: str = None, force: bool = False, skip_large: bool = False, test_mode: bool = False):
@@ -50,11 +51,17 @@ class BackupAnalyzer:
         self.should_exit = False
         self.start_time = None
         
-        # Define patterns to ignore
+        # Add size-based tracking for quick duplicate detection
+        self.size_to_files = defaultdict(list)  # Maps file size to list of files
+        
+        # Track skipped files and their sizes
+        self.skipped_files = defaultdict(int)  # Maps reason to total size
+        self.skipped_file_count = defaultdict(int)  # Maps reason to count
+        
+        # Define patterns to ignore - reduced list
         self.ignored_patterns = {
-            '.git', '.DS_Store', 'Thumbs.db', 
-            '.cache', '__pycache__', 'node_modules',
-            '.env', '.venv', 'venv'
+            '.git',  # Keep this to avoid processing git metadata
+            '__pycache__'  # Keep this to avoid processing Python cache
         }
         
         # Set up output directory
@@ -64,11 +71,12 @@ class BackupAnalyzer:
         # Set up cache file in the output directory if not specified
         if cache_file:
             self.cache_file = Path(cache_file)
+            logger.info(f"Using cache file: {self.cache_file}")
         else:
             # Use the output directory for cache
             self.cache_file = self.output_dir / "cache.pkl"
         
-        logger.info(f"Using cache file: {self.cache_file}")
+        
 
     def handle_interrupt(self, signum, frame):
         """Handle interrupt signal (Ctrl+C/Command+C) gracefully."""
@@ -139,28 +147,31 @@ class BackupAnalyzer:
             logger.error(f"Error saving cache: {e}")
 
     def calculate_file_hash(self, file_path: Path) -> str:
-        """Calculate SHA-256 hash of a file using optimized reading strategy."""
-        sha256_hash = hashlib.sha256()
+        """Calculate MD5 hash of a file using optimized reading strategy."""
+        md5_hash = hashlib.md5()  # Using MD5 instead of SHA-256 for speed
         try:
             file_size = file_path.stat().st_size
             
             # For large files, use memory-mapped reading
             if file_size > LARGE_FILE_THRESHOLD:
                 with open(file_path, 'rb') as f:
-                    with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
-                        sha256_hash.update(mm)
+                    # Read first and last 1MB for quick comparison
+                    f.seek(0)
+                    first_chunk = f.read(SIZE_CHUNK)
+                    f.seek(-SIZE_CHUNK, 2)
+                    last_chunk = f.read(SIZE_CHUNK)
+                    md5_hash.update(first_chunk)
+                    md5_hash.update(last_chunk)
             else:
                 # For smaller files, use chunked reading
                 with open(file_path, "rb") as f:
                     while chunk := f.read(CHUNK_SIZE):
-                        sha256_hash.update(chunk)
+                        md5_hash.update(chunk)
                         
-            return sha256_hash.hexdigest()
+            return md5_hash.hexdigest()
         except (PermissionError, FileNotFoundError):
-            # Don't log these common errors - they're expected for some files
             return ""
         except Exception as e:
-            # Only log unexpected errors
             logger.debug(f"Unexpected error reading {file_path}: {e}")
             return ""
 
@@ -179,20 +190,50 @@ class BackupAnalyzer:
         """Process a batch of files and return their information."""
         results = []
         logger.debug(f"Starting batch processing of {len(file_paths)} files")
+        
+        # First pass: collect file sizes
+        size_map = {}
         for file_path in file_paths:
             try:
-                logger.debug(f"Processing file: {file_path}")
-                stats = file_path.stat()
-                file_hash = self.calculate_file_hash(file_path)
-                file_type = self.get_file_type(file_path)
-                logger.debug(f"Successfully processed {file_path}: hash={file_hash[:8]}..., type={file_type}, size={stats.st_size}")
-                results.append((file_hash, file_type, stats.st_size, str(file_path)))
+                size = file_path.stat().st_size
+                size_map[file_path] = size
             except (PermissionError, FileNotFoundError):
-                logger.debug(f"Permission denied or file not found: {file_path}")
-                results.append(("", "unknown", 0, str(file_path)))
+                continue
             except Exception as e:
-                logger.debug(f"Unexpected error processing {file_path}: {e}")
-                results.append(("", "unknown", 0, str(file_path)))
+                logger.debug(f"Unexpected error accessing {file_path}: {e}")
+                continue
+        
+        # Group files by size for quick duplicate detection
+        size_groups = defaultdict(list)
+        for file_path, size in size_map.items():
+            size_groups[size].append(file_path)
+        
+        # Process each size group
+        for size, paths in size_groups.items():
+            if len(paths) == 1:
+                # Single file of this size
+                file_path = paths[0]
+                file_type = self.get_file_type(file_path)
+                # Generate a unique hash for single files
+                file_hash = self.calculate_file_hash(file_path)
+                if not file_hash:  # If hash calculation failed, use a unique identifier
+                    file_hash = f"unique_{file_path.name}_{size}"
+                results.append((file_hash, file_type, size, str(file_path)))
+            else:
+                # Multiple files of same size, need to hash
+                for file_path in paths:
+                    try:
+                        file_hash = self.calculate_file_hash(file_path)
+                        file_type = self.get_file_type(file_path)
+                        if not file_hash:  # If hash calculation failed, use a unique identifier
+                            file_hash = f"error_{file_path.name}_{size}"
+                        results.append((file_hash, file_type, size, str(file_path)))
+                    except Exception as e:
+                        logger.debug(f"Error processing {file_path}: {e}")
+                        # Generate a unique hash for files that failed to hash
+                        file_hash = f"error_{file_path.name}_{size}"
+                        results.append((file_hash, "unknown", size, str(file_path)))
+        
         logger.debug(f"Completed batch processing. Got {len(results)} results")
         return results
 
@@ -200,7 +241,6 @@ class BackupAnalyzer:
         """Print current status including I/O stats."""
         last_count = 0
         last_time = time.time()
-        stall_threshold = 30  # seconds
         
         while True:
             if self.start_time is None:
@@ -211,17 +251,6 @@ class BackupAnalyzer:
             elapsed = current_time - self.start_time
             files_per_second = self.file_count / elapsed if elapsed > 0 else 0
             
-            # Check for stalls
-            if self.file_count == last_count:
-                stall_time = current_time - last_time
-                if stall_time > stall_threshold:
-                    logger.warning(
-                        f"Processing appears to be stalled! No new files processed in {stall_time:.1f} seconds."
-                    )
-            else:
-                last_time = current_time
-                last_count = self.file_count
-            
             # Print simplified status without drive I/O stats
             logger.info(
                 f"Processed {self.file_count} files ({self._format_size(self.total_size)}) | "
@@ -230,6 +259,34 @@ class BackupAnalyzer:
             )
             
             time.sleep(5)  # Update every 5 seconds
+
+    def get_file_size(self, file_path: Path) -> int:
+        """Get the total size of a file including extended attributes and metadata."""
+        try:
+            stat = file_path.stat()
+            size = stat.st_size
+            
+            # Get extended attributes size
+            try:
+                xattr_list = os.listxattr(str(file_path))
+                for attr in xattr_list:
+                    size += len(os.getxattr(str(file_path), attr))
+            except (OSError, AttributeError):
+                pass  # Some filesystems don't support xattrs
+                
+            # Get ACL size if available
+            try:
+                acl = os.getxattr(str(file_path), 'system.posix_acl_access')
+                size += len(acl)
+            except (OSError, AttributeError):
+                pass  # ACLs not supported or not present
+                
+            return size
+        except (PermissionError, FileNotFoundError) as e:
+            raise e
+        except Exception as e:
+            logger.warning(f"Error getting size for {file_path}: {e}")
+            return 0
 
     def analyze_directory(self):
         """Analyze the directory structure and collect file information using optimized multiprocessing."""
@@ -249,20 +306,59 @@ class BackupAnalyzer:
         # Collect all files to process
         files_to_process = []
         large_files = []
+        total_raw_size = 0  # Track total size before any filtering
+        total_files_seen = 0  # Track total number of files seen
+        
+        # Track files by type for debugging
+        files_by_type = defaultdict(int)
+        size_by_type = defaultdict(int)
+        
+        # Track large files specifically
+        large_files_by_type = defaultdict(int)
+        large_files_size = 0
+        large_files_count = 0
         
         logger.info("Scanning directory for files...")
-        for root, dirs, files in os.walk(self.root_dir):
-            if self.should_exit:
-                break
-            dirs[:] = [d for d in dirs if not self.should_ignore(Path(root) / d)]
-            for file in files:
-                file_path = Path(root) / file
-                if not self.should_ignore(file_path) and str(file_path) not in self.processed_files:
+        try:
+            for root, dirs, files in os.walk(self.root_dir, topdown=True):
+                if self.should_exit:
+                    break
+                
+                # Filter directories before processing
+                dirs[:] = [d for d in dirs if not self.should_ignore(Path(root) / d)]
+                
+                for file in files:
+                    total_files_seen += 1
+                    file_path = Path(root) / file
                     try:
-                        size = file_path.stat().st_size
+                        # Get file size including metadata
+                        size = self.get_file_size(file_path)
+                        total_raw_size += size
+                        
+                        # Track file type for debugging
+                        file_type = self.get_file_type(file_path)
+                        files_by_type[file_type] += 1
+                        size_by_type[file_type] += size
+                        
+                        if self.should_ignore(file_path):
+                            self.skipped_files['ignored_pattern'] += size
+                            self.skipped_file_count['ignored_pattern'] += 1
+                            continue
+                            
+                        if str(file_path) in self.processed_files:
+                            self.skipped_files['already_processed'] += size
+                            self.skipped_file_count['already_processed'] += 1
+                            continue
+                            
                         if size > LARGE_FILE_THRESHOLD:
                             if not self.skip_large:
                                 large_files.append(file_path)
+                                large_files_count += 1
+                                large_files_size += size
+                                large_files_by_type[file_type] += 1
+                            else:
+                                self.skipped_files['large_file'] += size
+                                self.skipped_file_count['large_file'] += 1
                         else:
                             files_to_process.append(file_path)
                             
@@ -271,128 +367,171 @@ class BackupAnalyzer:
                             logger.info("Test mode: Reached 2000 files limit")
                             break
                             
-                    except (PermissionError, FileNotFoundError):
+                    except PermissionError:
+                        self.skipped_files['permission_error'] += size
+                        self.skipped_file_count['permission_error'] += 1
+                        logger.warning(f"Permission error accessing {file_path}")
+                        continue
+                    except FileNotFoundError:
+                        self.skipped_files['not_found'] += size
+                        self.skipped_file_count['not_found'] += 1
+                        logger.warning(f"File not found: {file_path}")
                         continue
                     except Exception as e:
-                        logger.debug(f"Unexpected error accessing {file_path}: {e}")
-            
-            # Break out of directory walk if we've reached the test mode limit
-            if self.test_mode and len(files_to_process) + len(large_files) >= 2000:
-                break
+                        self.skipped_files['other_error'] += size
+                        self.skipped_file_count['other_error'] += 1
+                        logger.warning(f"Unexpected error accessing {file_path}: {e}")
+                        continue
+                
+                # Break out of directory walk if we've reached the test mode limit
+                if self.test_mode and len(files_to_process) + len(large_files) >= 2000:
+                    break
+                    
+        except Exception as e:
+            logger.error(f"Error during directory walk: {e}")
+            raise
 
         total_files = len(files_to_process) + len(large_files)
-        logger.info(f"Found {total_files} files to analyze ({len(large_files)} large files)")
-
-        # Process small files first
-        if files_to_process:
-            logger.info(f"Processing {len(files_to_process)} small files in batches of {BATCH_SIZE}...")
+        logger.info(f"\nDirectory scan complete:")
+        logger.info(f"Total files seen: {total_files_seen}")
+        logger.info(f"Total raw size: {self._format_size(total_raw_size)} ({total_raw_size} bytes)")
+        logger.info(f"Files to process: {total_files} ({len(large_files)} large files)")
+        
+        # Log large files summary
+        if large_files_count > 0:
+            logger.info("\nLarge files summary:")
+            logger.info(f"Total large files: {large_files_count}")
+            logger.info(f"Total large files size: {self._format_size(large_files_size)} ({large_files_size} bytes)")
+            logger.info("Large files by type:")
+            for file_type, count in sorted(large_files_by_type.items(), key=lambda x: x[1], reverse=True):
+                logger.info(f"  {file_type}: {count} files")
+        
+        # Log file type distribution
+        logger.info("\nFile type distribution:")
+        for file_type, count in sorted(files_by_type.items(), key=lambda x: x[1], reverse=True):
+            size = size_by_type[file_type]
+            logger.info(f"  {file_type}: {count} files, {self._format_size(size)} ({size} bytes)")
+        
+        # Log skipped files summary
+        if any(self.skipped_files.values()):
+            logger.info("\nSkipped files summary:")
+            total_skipped_size = 0
+            for reason, size in self.skipped_files.items():
+                count = self.skipped_file_count[reason]
+                total_skipped_size += size
+                logger.info(f"  {reason}: {count} files, {self._format_size(size)} ({size} bytes)")
+            logger.info(f"Total skipped size: {self._format_size(total_skipped_size)} ({total_skipped_size} bytes)")
+        
+        # Process all files in parallel using ProcessPoolExecutor
+        with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            # Combine all files into one list
+            all_files = files_to_process + large_files
             
-            # Process files in batches using ProcessPoolExecutor with sliding window
-            with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
-                # Calculate optimal number of pending batches (2x workers for good throughput)
-                max_pending_batches = MAX_WORKERS * 2
-                
-                # Create batches
-                batches = [files_to_process[i:i + BATCH_SIZE] for i in range(0, len(files_to_process), BATCH_SIZE)]
-                total_batches = len(batches)
-                
-                # Initialize tracking variables
-                futures = {}  # Map futures to batch indices
-                next_batch_idx = 0
-                completed_batches = 0
-                
-                # Process results as they complete with progress bar
-                with tqdm(total=len(files_to_process), desc="Analyzing small files") as pbar:
-                    while completed_batches < total_batches and not self.should_exit:
-                        # Submit new batches if we have capacity
-                        while len(futures) < max_pending_batches and next_batch_idx < total_batches:
-                            batch_idx = next_batch_idx
-                            batch = batches[batch_idx]
-                            future = executor.submit(self.process_files_batch, batch)
-                            futures[future] = batch_idx
-                            next_batch_idx += 1
-                        
-                        # Wait for any future to complete
-                        if futures:
-                            done, _ = wait(futures.keys(), return_when=FIRST_COMPLETED)
-                            
-                            # Process completed futures
-                            for future in done:
-                                batch_idx = futures.pop(future)
-                                completed_batches += 1
-                                
-                                try:
-                                    results = future.result()
-                                    for file_hash, file_type, size, file_path in results:
-                                        if file_hash:
-                                            self.file_hashes[file_hash].append(Path(file_path))
-                                        self.file_types[file_type].append(Path(file_path))
-                                        self.total_size += size
-                                        self.file_count += 1
-                                        self.processed_files.add(file_path)
-                                        pbar.update(1)
-                                except Exception as e:
-                                    logger.error(f"Error processing batch {batch_idx}: {e}")
-                        else:
-                            # No futures to wait for, small sleep to prevent CPU spinning
-                            time.sleep(0.01)
-
-        # Then process large files if not skipped
-        if not self.should_exit and large_files and not self.skip_large:
-            logger.info(f"Now processing {len(large_files)} large files...")
-            # Sort large files by size to process smaller ones first
-            large_files.sort(key=lambda x: x.stat().st_size)
+            # Create batches
+            batches = [all_files[i:i + BATCH_SIZE] for i in range(0, len(all_files), BATCH_SIZE)]
+            total_batches = len(batches)
             
-            # Process large files in parallel using the same sliding window approach
-            with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
-                # Calculate optimal number of pending batches (2x workers for good throughput)
-                max_pending_batches = MAX_WORKERS * 2
+            # Track failed batches for retry
+            failed_batches = []
+            max_retries = 3
+            
+            # Process results as they complete with progress bar
+            with tqdm(total=len(all_files), desc="Analyzing files") as pbar:
+                # Submit all batches first
+                futures = []
+                for batch in batches:
+                    future = executor.submit(self.process_files_batch, batch)
+                    future.batch = batch  # Store the batch with the future
+                    futures.append(future)
                 
-                # Create batches of large files (smaller batch size for large files)
-                large_batch_size = max(1, BATCH_SIZE // 10)  # Smaller batches for large files
-                batches = [large_files[i:i + large_batch_size] for i in range(0, len(large_files), large_batch_size)]
-                total_batches = len(batches)
-                
-                # Initialize tracking variables
-                futures = {}  # Map futures to batch indices
-                next_batch_idx = 0
-                completed_batches = 0
-                
-                # Process results as they complete with progress bar
-                with tqdm(total=len(large_files), desc="Analyzing large files") as pbar:
-                    while completed_batches < total_batches and not self.should_exit:
-                        # Submit new batches if we have capacity
-                        while len(futures) < max_pending_batches and next_batch_idx < total_batches:
-                            batch_idx = next_batch_idx
-                            batch = batches[batch_idx]
-                            future = executor.submit(self.process_files_batch, batch)
-                            futures[future] = batch_idx
-                            next_batch_idx += 1
+                # Process results as they complete
+                for future in as_completed(futures):
+                    if self.should_exit:
+                        break
                         
-                        # Wait for any future to complete
-                        if futures:
-                            done, _ = wait(futures.keys(), return_when=FIRST_COMPLETED)
+                    try:
+                        results = future.result()
+                        # Create a temporary dictionary to store new entries
+                        new_entries = defaultdict(list)
+                        new_types = defaultdict(list)
+                        
+                        for file_hash, file_type, size, file_path in results:
+                            if file_hash:
+                                new_entries[file_hash].append(Path(file_path))
+                            new_types[file_type].append(Path(file_path))
+                            self.total_size += size
+                            self.file_count += 1
+                            self.processed_files.add(file_path)
+                            pbar.update(1)
+                        
+                        # Update the main dictionaries after processing the batch
+                        for hash_value, paths in new_entries.items():
+                            self.file_hashes[hash_value].extend(paths)
+                        for file_type, paths in new_types.items():
+                            self.file_types[file_type].extend(paths)
                             
-                            # Process completed futures
-                            for future in done:
-                                batch_idx = futures.pop(future)
-                                completed_batches += 1
+                    except Exception as e:
+                        logger.error(f"Error processing batch: {e}")
+                        # Add to failed batches for retry
+                        failed_batches.append(future)
+                
+                # Retry failed batches
+                retry_count = 0
+                while failed_batches and retry_count < max_retries:
+                    retry_count += 1
+                    logger.info(f"Retrying {len(failed_batches)} failed batches (attempt {retry_count}/{max_retries})")
+                    
+                    # Create new futures for failed batches
+                    new_futures = []
+                    for future in failed_batches:
+                        try:
+                            batch = future.batch  # Get the original batch
+                            new_future = executor.submit(self.process_files_batch, batch)
+                            new_future.batch = batch  # Store the batch with the new future
+                            new_futures.append(new_future)
+                        except Exception as e:
+                            logger.error(f"Error creating retry future: {e}")
+                    
+                    # Clear failed batches list
+                    failed_batches = []
+                    
+                    # Process retry results
+                    for future in as_completed(new_futures):
+                        try:
+                            results = future.result()
+                            # Create a temporary dictionary to store new entries
+                            new_entries = defaultdict(list)
+                            new_types = defaultdict(list)
+                            
+                            for file_hash, file_type, size, file_path in results:
+                                if file_hash:
+                                    new_entries[file_hash].append(Path(file_path))
+                                new_types[file_type].append(Path(file_path))
+                                self.total_size += size
+                                self.file_count += 1
+                                self.processed_files.add(file_path)
+                                pbar.update(1)
+                            
+                            # Update the main dictionaries after processing the batch
+                            for hash_value, paths in new_entries.items():
+                                self.file_hashes[hash_value].extend(paths)
+                            for file_type, paths in new_types.items():
+                                self.file_types[file_type].extend(paths)
                                 
-                                try:
-                                    results = future.result()
-                                    for file_hash, file_type, size, file_path in results:
-                                        if file_hash:
-                                            self.file_hashes[file_hash].append(Path(file_path))
-                                        self.file_types[file_type].append(Path(file_path))
-                                        self.total_size += size
-                                        self.file_count += 1
-                                        self.processed_files.add(file_path)
-                                        pbar.update(1)
-                                except Exception as e:
-                                    logger.error(f"Error processing large file batch {batch_idx}: {e}")
-                        else:
-                            # No futures to wait for, small sleep to prevent CPU spinning
-                            time.sleep(0.01)
+                        except Exception as e:
+                            logger.error(f"Error processing retry batch: {e}")
+                            failed_batches.append(future)
+                
+                # Log any remaining failed batches
+                if failed_batches:
+                    logger.warning(f"Failed to process {len(failed_batches)} batches after {max_retries} retries")
+
+        # Final size summary
+        logger.info("\nFinal size summary:")
+        logger.info(f"Total raw size: {self._format_size(total_raw_size)} ({total_raw_size} bytes)")
+        logger.info(f"Total skipped size: {self._format_size(total_skipped_size)} ({total_skipped_size} bytes)")
+        logger.info(f"Total processed size: {self._format_size(self.total_size)} ({self.total_size} bytes)")
+        logger.info(f"Size difference: {self._format_size(total_raw_size - self.total_size - total_skipped_size)} ({total_raw_size - self.total_size - total_skipped_size} bytes)")
 
         self.save_cache()
 
@@ -404,6 +543,13 @@ class BackupAnalyzer:
         """Generate a comprehensive report of the analysis."""
         duplicates = self.find_duplicates()
         self.duplicate_count = sum(len(paths) - 1 for paths in duplicates.items())
+        
+        # Calculate additional duplicate statistics
+        total_files_with_duplicates = sum(1 for paths in duplicates.values() if len(paths) > 1)
+        duplicate_distribution = defaultdict(int)
+        for paths in duplicates.values():
+            if len(paths) > 1:
+                duplicate_distribution[len(paths)] += 1
 
         # Create detailed duplicate groups with size information
         duplicate_groups = {}
@@ -437,6 +583,8 @@ class BackupAnalyzer:
             "total_size_human": self._format_size(self.total_size),
             "total_files": self.file_count,
             "duplicate_files": self.duplicate_count,
+            "files_with_duplicates": total_files_with_duplicates,
+            "duplicate_distribution": dict(duplicate_distribution),
             "total_recoverable_space_bytes": total_recoverable_space,
             "total_recoverable_space_human": self._format_size(total_recoverable_space),
             "file_types": {
@@ -448,12 +596,79 @@ class BackupAnalyzer:
         return report
 
     def _format_size(self, size_bytes: int) -> str:
-        """Convert bytes to human readable format."""
-        for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+        """Convert bytes to human readable format using binary prefixes (KiB, MiB, GiB)."""
+        for unit in ['B', 'KiB', 'MiB', 'GiB', 'TiB']:
             if size_bytes < 1024.0:
                 return f"{size_bytes:.2f} {unit}"
             size_bytes /= 1024.0
-        return f"{size_bytes:.2f} PB"
+        return f"{size_bytes:.2f} PiB"
+
+    def analyze_duplicate_folders(self, duplicates: Dict[str, List[Path]]) -> Dict:
+        """Analyze duplicate folders based on duplicate files.
+        
+        Args:
+            duplicates: Dictionary of duplicate file groups
+            
+        Returns:
+            Dictionary containing duplicate folder analysis
+        """
+        # Group duplicate files by their parent folders
+        folder_groups = defaultdict(list)
+        for hash_value, paths in duplicates.items():
+            # Get parent folders for each path
+            parent_folders = [str(p.parent) for p in paths]
+            # Add to folder groups if we have multiple unique parent folders
+            if len(set(parent_folders)) > 1:
+                # Use a string key instead of tuple
+                folder_key = "|".join(sorted(set(parent_folders)))
+                folder_groups[folder_key].append({
+                    'hash': hash_value,
+                    'paths': [str(p) for p in paths],
+                    'size': paths[0].stat().st_size,
+                    'type': self.get_file_type(paths[0])
+                })
+        
+        # Analyze folder relationships
+        folder_analysis = {}
+        for folder_key, files in folder_groups.items():
+            folders = folder_key.split("|")
+            # Calculate folder similarity scores
+            folder_sets = [set(f.split('/')) for f in folders]
+            similarity_scores = {}
+            
+            # Compare each pair of folders
+            for i, folder1 in enumerate(folders):
+                for j, folder2 in enumerate(folders[i+1:], i+1):
+                    set1 = set(folder1.split('/'))
+                    set2 = set(folder2.split('/'))
+                    
+                    # Calculate Jaccard similarity
+                    intersection = len(set1.intersection(set2))
+                    union = len(set1.union(set2))
+                    similarity = intersection / union if union > 0 else 0
+                    
+                    # Check if one folder is a subset of another
+                    is_subset = set1.issubset(set2) or set2.issubset(set1)
+                    
+                    similarity_scores[f"{folder1} <-> {folder2}"] = {
+                        'similarity': similarity,
+                        'is_subset': is_subset,
+                        'subset_direction': 'folder1' if set1.issubset(set2) else 'folder2' if set2.issubset(set1) else None
+                    }
+            
+            # Calculate total size of duplicate files in these folders
+            total_size = sum(f['size'] * (len(f['paths']) - 1) for f in files)
+            
+            folder_analysis[folder_key] = {
+                'folders': folders,  # Store the list of folders
+                'files': files,
+                'total_files': len(files),
+                'total_size': total_size,
+                'total_size_human': self._format_size(total_size),
+                'similarity_scores': similarity_scores
+            }
+        
+        return folder_analysis
 
     def analyze_duplicates(self, min_size: int = 0, output_file: str = None) -> Dict:
         """Analyze duplicate files and return detailed information.
@@ -475,25 +690,40 @@ class BackupAnalyzer:
                 try:
                     size = file_paths[0].stat().st_size
                     if size >= min_size:
-                        duplicates[file_hash] = {
-                            'paths': [str(p) for p in file_paths],
-                            'size': size,
-                            'count': len(file_paths),
-                            'type': self.get_file_type(file_paths[0])
-                        }
+                        duplicates[file_hash] = file_paths
                         total_duplicate_size += size * (len(file_paths) - 1)  # Size of duplicates only
                 except (PermissionError, FileNotFoundError):
                     continue
         
+        # Analyze duplicate folders
+        folder_analysis = self.analyze_duplicate_folders(duplicates)
+        
+        # Convert duplicates to the format expected by the output
+        formatted_duplicates = {}
+        for hash_value, paths in duplicates.items():
+            size = paths[0].stat().st_size
+            formatted_duplicates[hash_value] = {
+                'paths': [str(p) for p in paths],
+                'size_bytes': size,
+                'size_human': self._format_size(size),
+                'count': len(paths),
+                'type': self.get_file_type(paths[0]),
+                'total_duplicate_size_bytes': size * (len(paths) - 1),
+                'total_duplicate_size_human': self._format_size(size * (len(paths) - 1))
+            }
+        
         # Sort duplicates by size (largest first)
-        sorted_duplicates = sorted(duplicates.items(), key=lambda x: x[1]['size'], reverse=True)
+        sorted_duplicates = sorted(formatted_duplicates.items(), 
+                                 key=lambda x: x[1]['size_bytes'], 
+                                 reverse=True)
         
         analysis = {
-            'total_duplicate_files': sum(d['count'] - 1 for d in duplicates.values()),
-            'total_duplicate_size': total_duplicate_size,
+            'total_duplicate_files': sum(d['count'] - 1 for d in formatted_duplicates.values()),
+            'total_duplicate_size_bytes': total_duplicate_size,
             'total_duplicate_size_human': self._format_size(total_duplicate_size),
             'duplicate_groups': len(duplicates),
-            'duplicates': dict(sorted_duplicates)  # Convert back to dict but maintain order
+            'duplicates': dict(sorted_duplicates),  # Convert back to dict but maintain order
+            'folder_analysis': folder_analysis
         }
         
         # Write to file if specified
@@ -501,6 +731,112 @@ class BackupAnalyzer:
             with open(output_file, 'w') as f:
                 json.dump(analysis, f, indent=2)
             logger.info(f"Duplicate analysis written to {output_file}")
+        
+        return analysis
+
+    def categorize_file(self, file_path: Path) -> str:
+        """Categorize a file into a high-level category."""
+        mime_type, _ = mimetypes.guess_type(str(file_path))
+        if not mime_type:
+            return "other"
+            
+        main_type = mime_type.split('/')[0]
+        if main_type in ['image', 'video', 'audio']:
+            return 'media'
+        elif main_type in ['text', 'application']:
+            # Further categorize application files
+            if mime_type.endswith(('pdf', 'msword', 'vnd.openxmlformats-officedocument')):
+                return 'documents'
+            elif mime_type.endswith(('octet-stream', 'x-msdownload', 'x-msdos-program')):
+                return 'applications'
+            return 'documents'
+        return 'other'
+
+    def analyze_other_files(self, output_file: str = None) -> dict:
+        """Analyze and categorize files that are not media or documents.
+        
+        Args:
+            output_file: Optional file to write the analysis to
+            
+        Returns:
+            Dictionary containing analysis of other files
+        """
+        # Initialize categories
+        categories = {
+            'media': [],
+            'documents': [],
+            'applications': [],
+            'other': []
+        }
+        
+        # Track file types and extensions within each category
+        file_types_by_category = {
+            'media': defaultdict(int),
+            'documents': defaultdict(int),
+            'applications': defaultdict(int),
+            'other': defaultdict(int)
+        }
+        
+        # Track file extensions for unknown types
+        extensions_by_category = {
+            'media': defaultdict(int),
+            'documents': defaultdict(int),
+            'applications': defaultdict(int),
+            'other': defaultdict(int)
+        }
+        
+        # Process all files
+        for file_paths in self.file_hashes.values():
+            for file_path in file_paths:
+                try:
+                    size = file_path.stat().st_size
+                    category = self.categorize_file(file_path)
+                    file_type = self.get_file_type(file_path)
+                    extension = file_path.suffix.lower() if file_path.suffix else 'no_extension'
+                    
+                    # Track file type counts
+                    file_types_by_category[category][file_type] += 1
+                    
+                    # Track extensions for unknown types
+                    if file_type == 'unknown':
+                        extensions_by_category[category][extension] += 1
+                    
+                    categories[category].append({
+                        'path': str(file_path),
+                        'size': size,
+                        'size_human': self._format_size(size),
+                        'type': file_type,
+                        'extension': extension
+                    })
+                except (PermissionError, FileNotFoundError):
+                    continue
+        
+        # Sort each category by size (largest first)
+        for category in categories:
+            categories[category].sort(key=lambda x: x['size'], reverse=True)
+        
+        # Calculate totals and include file type and extension breakdowns
+        totals = {
+            category: {
+                'count': len(files),
+                'total_size': sum(f['size'] for f in files),
+                'total_size_human': self._format_size(sum(f['size'] for f in files)),
+                'file_types': dict(file_types_by_category[category]),
+                'extensions': dict(extensions_by_category[category])
+            }
+            for category, files in categories.items()
+        }
+        
+        analysis = {
+            'totals': totals,
+            'categories': categories
+        }
+        
+        # Write to file if specified
+        if output_file:
+            with open(output_file, 'w') as f:
+                json.dump(analysis, f, indent=2)
+            logger.info(f"Other files analysis written to {output_file}")
         
         return analysis
 
@@ -519,6 +855,9 @@ def main():
                       help='Enable debug logging')
     parser.add_argument('--analyze-duplicates', action='store_true',
                       help='Analyze and list duplicate files')
+    parser.add_argument('--analyze-other', action='store_true',
+                      help='Analyze and categorize other files')
+    parser.add_argument('--other-output', help='Output file for other files analysis')
     parser.add_argument('--min-size', type=int, default=0,
                       help='Minimum file size in bytes to consider for duplicate analysis')
     parser.add_argument('--duplicates-output', help='Output file for duplicate analysis')
@@ -541,6 +880,8 @@ def main():
         args.output = str(output_dir / Path(args.output).name)
     if args.duplicates_output:
         args.duplicates_output = str(output_dir / Path(args.duplicates_output).name)
+    if args.other_output:
+        args.other_output = str(output_dir / Path(args.other_output).name)
     if args.cache:
         args.cache = str(output_dir / Path(args.cache).name)
 
@@ -576,15 +917,47 @@ def main():
         print(f"Total duplicate size: {duplicates['total_duplicate_size_human']}")
         print(f"Number of duplicate groups: {duplicates['duplicate_groups']}")
         
-        # Print all duplicate groups ordered by size (largest first)
-        print("\nAll duplicate groups (ordered by size, largest first):")
-        for i, (hash, info) in enumerate(duplicates['duplicates'].items(), 1):
-            print(f"\n{i}. Size: {analyzer._format_size(info['size'])}")
-            print(f"   Type: {info['type']}")
-            print(f"   Count: {info['count']} files")
-            print("   Paths:")
-            for path in info['paths']:
-                print(f"   - {path}")
+        # Display folder analysis
+        print("\n=== Duplicate Folder Analysis ===")
+        folder_analysis = duplicates['folder_analysis']
+        print(f"Found {len(folder_analysis)} groups of duplicate folders")
+        
+        # Sort folder groups by total size
+        sorted_folders = sorted(folder_analysis.items(), 
+                              key=lambda x: x[1]['total_size'], 
+                              reverse=True)
+        
+        for folder_key, analysis in sorted_folders[:10]:  # Show top 10 largest groups
+            print(f"\nFolder Group (Total Size: {analysis['total_size_human']}):")
+            for folder in analysis['folders']:
+                print(f"  - {folder}")
+            
+            print("\n  Similarity Analysis:")
+            for pair, scores in analysis['similarity_scores'].items():
+                print(f"    {pair}:")
+                print(f"      Similarity: {scores['similarity']:.2%}")
+                if scores['is_subset']:
+                    print(f"      One folder is a subset of the other")
+                    print(f"      Subset direction: {scores['subset_direction']}")
+            
+            print(f"  Total duplicate files in group: {analysis['total_files']}")
+
+    # Analyze other files if requested
+    if args.analyze_other:
+        print("\n=== Other Files Analysis ===")
+        other_files = analyzer.analyze_other_files(output_file=args.other_output)
+        print("\nCategory Totals:")
+        for category, stats in other_files['totals'].items():
+            print(f"{category.title()}:")
+            print(f"  Count: {stats['count']}")
+            print(f"  Total Size: {stats['total_size_human']}")
+        
+        print("\nLargest Files by Category:")
+        for category, files in other_files['categories'].items():
+            if files:
+                print(f"\n{category.title()} (Top 5):")
+                for i, file_info in enumerate(files[:5], 1):
+                    print(f"  {i}. {file_info['size_human']} - {file_info['path']}")
 
 if __name__ == "__main__":
     main() 

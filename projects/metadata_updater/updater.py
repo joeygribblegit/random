@@ -22,13 +22,14 @@ def update_exif_timestamp(image_path, new_timestamp):
     image.save(image_path, "jpeg", exif=exif_bytes, quality=90, subsampling=0)
 
 def parse_filename_to_datetime(filename):
-    base_name = os.path.splitext(filename)[0]
-    parts = base_name.split('_')
-    date_str = '24-12-12' #I set this manually because it was wrong
-    time_str = parts[1]
-    period_str = parts[2]
-    datetime_str = f"{date_str} {time_str} {period_str}"
-    return datetime.strptime(datetime_str, "%y-%m-%d %I%M%S %p")
+    # base_name = os.path.splitext(filename)[0]
+    # parts = base_name.split('_')
+    date_str = '16-09-13' #I set this manually because it was wrong
+    time_str = "00:00:00" #I set this manually because it was wrong
+    # time_str = parts[1]
+    # period_str = parts[2]
+    datetime_str = f"{date_str} {time_str}"
+    return datetime.strptime(datetime_str, "%y-%m-%d %H:%M:%S")
 
 def update_photos_in_directory(directory_path):
     for filename in os.listdir(directory_path):
@@ -42,5 +43,5 @@ def update_photos_in_directory(directory_path):
                 print(f"Failed to update {filename}: {e}")
 
 # Update the directory path to your folder containing the photos
-directory_path = '/Users/jgribble/Desktop/117GOPRO'
+directory_path = '/Users/jgribble/Downloads/conner china/'
 update_photos_in_directory(directory_path)
